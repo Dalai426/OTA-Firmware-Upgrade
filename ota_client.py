@@ -2,6 +2,8 @@ import json
 import paho.mqtt.client as mqtt
 import sys
 from pathlib import Path
+from MerkleTree import build_merkle_tree
+import math
 
 manifest_topic='ota/manifest'
 chunk_topic='ota/chunk'
@@ -10,19 +12,39 @@ status_topic='client/status'
 BROKER = "localhost"
 PORT = 1883
 
+
+class Chunk:
+    def __init__(self, status: str, path: str, content: bytes | None):
+        self.status: str = status
+        self.path: Path = Path(path)
+        self.content: bytes | None = content
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
 class OtaUpdate:
     def __init__(self, version:str, root:str, chunk_count:int,manifest_path:str):
         self.version = version
         self.root = root
         self.chunk_count = chunk_count
-        manifest_path=manifest_path
-        chunks = {}
+        self.manifest_path: Path = Path(manifest_path)
+        self.reconstructed_firmware_path:Path = Path(self.version) / "firmware_reconstructed.txt"
+        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.chunks: dict[int, Chunk] = {}
         for i in range(chunk_count):
-            chunks[i].status = "pending"
-            chunks[i].path=f"{version}/data/chunk_{i}.bin"
-        self.chunks=chunks
+            self.chunks[i] = Chunk(
+                status="pending",
+                path=f"{version}/data/chunk_{i}.bin",
+                content=None
+            )
+    def reconstruct_firmware(self):
+        with self.reconstructed_firmware_path.open("wb") as firmware:
+            for index in sorted(self.chunks):
+                chunk = self.chunks[index]
+                with chunk.path.open("rb") as f:
+                    firmware.write(f.read())
+
+
     
-otaUpdate:OtaUpdate
+otaUpdate : OtaUpdate | None
 
 def receive_manifest(payload:bytes):
     global otaUpdate
@@ -32,6 +54,9 @@ def receive_manifest(payload:bytes):
         version=data['version']
         chunk_count:int=data['chunk_count']
         otaUpdate = OtaUpdate(version, root, chunk_count,f"{version}/data/manifest.json")
+        with otaUpdate.manifest_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        
         returningStatus = {
             "status": "PendingChunks",
             "version": version
@@ -44,38 +69,67 @@ def receive_manifest(payload:bytes):
 
 def receive_chunks(payload:bytes):
     global otaUpdate
-    # Separate metadata and chunk data
-    json_data, chunk_data = payload.split(b"\n", 1)
-    meta_data=json.loads(json_data.decode("utf-8"))
-    if(meta_data.version!=otaUpdate.version):
-        print("Ignoring chunk: version mismatch")
+    try:
+        # Separate metadata and chunk data
+        json_data, chunk_data = payload.split(b"\n", 1)
+        meta_data=json.loads(json_data.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        print("Invalid chunk payload")
         return
+
     if otaUpdate is None:
         return
-    chunk=otaUpdate.chunks[meta_data["chunk_index"]]
+    if meta_data["version"]!=otaUpdate.version:
+        print("Ignoring chunk: version mismatch")
+        return
+    
+    chunk_index = meta_data.get("chunk_index")
+    if chunk_index not in otaUpdate.chunks:
+        print(f"Ignoring chunk: invalid chunk index {chunk_index}")
+        return
+    chunk = otaUpdate.chunks[chunk_index]
+
     # writing chunk into file.
     if chunk is not None and chunk.status=='pending':
-        chunk_file = chunk.path
-        with open(chunk_file, "wb") as f:
+        with open(chunk.path, "wb") as f:
             f.write(chunk_data)
+        chunk.content=chunk_data
         chunk.status="received"
-        
+
     if all(
-    status == "received"
-    for status in otaUpdate.chunks.values()
+        chunk.status == "received"
+        for chunk in otaUpdate.chunks.values()
     ):
-        client.publish(status_topic, payload=json.dumps({
-            "status": "SuccessfullyDelivered",
-            "version": otaUpdate.version
-        }).encode("utf-8"), qos=2)
-        
+        if validate_merkle_tree(ota=otaUpdate):
+            otaUpdate.reconstruct_firmware()
+            client.publish(status_topic, payload=json.dumps({
+                "status": "SuccessfullyDelivered",
+                "version": otaUpdate.version
+            }).encode("utf-8"), qos=2)
+        else:
+            print("Verification failed.")
+            client.publish(status_topic, payload=json.dumps({
+                "status": "DeliveryFailed",
+                "version": otaUpdate.version
+            }).encode("utf-8"), qos=2)
+            otaUpdate=None
+
+def validate_merkle_tree(ota:OtaUpdate):
+    tree_height = int(math.log2(ota.chunk_count))
+    merkle_root=build_merkle_tree(tree_height,0,chunks=[chunk.content for chunk in ota.chunks.values()])
+    if ota.root != merkle_root.hash:
+        return False
+    return True
+    
+
 
 def on_message(client, userdata, message):
     print("Topic:", message.topic)
     print("Received", len(message.payload), "bytes")
-    if message.topic == manifest_topic:
+    topic:str=message.topic
+    if topic == manifest_topic:
         receive_manifest(message.payload)
-    elif message.topic.startsWith(chunk_topic):
+    elif topic.startswith(f"{chunk_topic}/"):
         receive_chunks(message.payload)
 
 
@@ -85,7 +139,8 @@ client = mqtt.Client()
 client.on_message = on_message
 
 client.connect(BROKER, PORT)
-client.subscribe(status_topic, qos=2)
+client.subscribe(manifest_topic, qos=2)
+client.subscribe(f"{chunk_topic}/+", qos=2)
 try:
     client.loop_forever()
 except KeyboardInterrupt:

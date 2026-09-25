@@ -33,8 +33,8 @@ for i in range(chunk_size):
 
 # creating merkle tree
 chunk_count = len(chunks)
-tree_height = math.log2(chunk_count)
-merkle_tree_root = build_merkle_tree(int(tree_height), 0, chunks)
+tree_height = int(math.log2(chunk_count))
+merkle_tree_root = build_merkle_tree(tree_height, 0, chunks)
 
 
 

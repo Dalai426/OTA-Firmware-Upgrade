@@ -2,10 +2,15 @@ import math
 import hashlib
 
 class Merkle_Node:
-    def __init__(self, hash:str, left = None, right = None):
-        self.hash : str = hash
-        self.left : Merkle_Node = left
-        self.right : Merkle_Node = right
+    def __init__(
+        self,
+        hash: str,
+        left: "Merkle_Node | None" = None,
+        right: "Merkle_Node | None" = None
+    ):
+        self.hash: str = hash
+        self.left: Merkle_Node | None = left
+        self.right: Merkle_Node | None = right
 
 def build_merkle_tree(tree_height: int, chunk_index: int, chunks: list):
     if tree_height == 0:
