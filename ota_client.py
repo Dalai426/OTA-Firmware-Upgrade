@@ -4,6 +4,12 @@ import sys
 from pathlib import Path
 from MerkleTree import build_merkle_tree
 import math
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
+from typing import cast
 
 manifest_topic='ota/manifest'
 chunk_topic='ota/chunk'
@@ -11,7 +17,18 @@ status_topic='client/status'
 
 BROKER = "localhost"
 PORT = 1883
+PASSWORD="my_password"
+USERNAME="ota_server"
 
+signature_length = 384
+
+with open("public_key.pem", "rb") as key_file:
+    public_key = cast(
+        RSAPublicKey,
+        serialization.load_pem_public_key(
+            key_file.read()
+        )
+    )
 
 class Chunk:
     def __init__(self, status: str, path: str, content: bytes | None):
@@ -49,7 +66,23 @@ otaUpdate : OtaUpdate | None
 def receive_manifest(payload:bytes):
     global otaUpdate
     try:
-        data = json.loads(payload.decode("utf-8"))
+        signature = payload[:signature_length]
+        manifest_payload = payload[signature_length:]
+        try:
+            public_key.verify(
+                signature,
+                manifest_payload,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+        except InvalidSignature:
+            print("Invalid manifest signature.")
+            raise InvalidSignature
+
+        data = json.loads(manifest_payload.decode("utf-8"))
         root = data['root']
         version=data['version']
         chunk_count:int=data['chunk_count']
@@ -65,7 +98,8 @@ def receive_manifest(payload:bytes):
         print("Ready for receiving chunks")
     except Exception as e:
         print(f"Error occurred while sending status information: {e}")
-        sys.exit(1)
+        otaUpdate=None
+        return
 
 def receive_chunks(payload:bytes):
     global otaUpdate
@@ -135,9 +169,11 @@ def on_message(client, userdata, message):
 
 
 client = mqtt.Client()
-
+client.username_pw_set(
+    username=USERNAME,
+    password=PASSWORD
+)
 client.on_message = on_message
-
 client.connect(BROKER, PORT)
 client.subscribe(manifest_topic, qos=2)
 client.subscribe(f"{chunk_topic}/+", qos=2)

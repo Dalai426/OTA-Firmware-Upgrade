@@ -1,6 +1,11 @@
 import json
 import paho.mqtt.client as mqtt
 import sys
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from typing import cast
 
 manifest_topic='ota/manifest'
 chunk_topic='ota/chunk'
@@ -8,9 +13,18 @@ status_topic='client/status'
 
 BROKER = "localhost"
 PORT = 1883
+PASSWORD="my_password"
+USERNAME="ota_server"
 
 version:str
 chunks={}
+
+with open("private_key.pem", "rb") as key_file:
+    private_key = cast(RSAPrivateKey, serialization.load_pem_private_key(
+        key_file.read(),
+        password=None
+    ))
+            
 
 def send_manifest():
     global version, chunks
@@ -31,7 +45,15 @@ def send_manifest():
         # MQTT's payload is fundamentally bytes.
         # Using UTF-8 encoding to convert the JSON string to bytes.
         payload = json.dumps(data).encode("utf-8")
-        client.publish(manifest_topic, payload=payload, qos=2)
+        signature = private_key.sign(
+            payload,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        client.publish(manifest_topic, payload = signature + payload, qos=2)
         print("Manifest Published")
     except Exception as e:
         print(f"Error occurred while sending manifest: {e}")
@@ -86,15 +108,18 @@ def on_message(client, userdata, message):
 
 
 client = mqtt.Client()
-
-client.on_message = on_message
-
-client.connect(BROKER, PORT)
-
-client.subscribe(status_topic, qos=2)
-send_manifest()
 try:
+    client.username_pw_set(
+        username=USERNAME,
+        password=PASSWORD
+    )
+    client.connect(BROKER, PORT)
+    client.on_message = on_message
+    client.subscribe(status_topic, qos=2)
+    send_manifest()
     client.loop_forever()
-except KeyboardInterrupt:
+except Exception as e:
+    print(f"MQTT error: {e}")
     print("Stopping OTA publisher...")
+finally:
     client.disconnect()
