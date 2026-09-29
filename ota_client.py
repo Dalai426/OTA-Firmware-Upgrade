@@ -69,6 +69,7 @@ def receive_manifest(payload:bytes):
         signature = payload[:signature_length]
         manifest_payload = payload[signature_length:]
         try:
+            # added
             public_key.verify(
                 signature,
                 manifest_payload,
@@ -149,7 +150,7 @@ def receive_chunks(payload:bytes):
             otaUpdate=None
 
 def validate_merkle_tree(ota:OtaUpdate):
-    tree_height = int(math.log2(ota.chunk_count))
+    tree_height = math.ceil(math.log2(ota.chunk_count))
     merkle_root=build_merkle_tree(tree_height,0,chunks=[chunk.content for chunk in ota.chunks.values()])
     if ota.root != merkle_root.hash:
         return False
@@ -169,6 +170,7 @@ def on_message(client, userdata, message):
 
 
 client = mqtt.Client()
+# added
 client.username_pw_set(
     username=USERNAME,
     password=PASSWORD

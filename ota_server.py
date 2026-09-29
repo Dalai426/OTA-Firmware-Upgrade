@@ -45,6 +45,7 @@ def send_manifest():
         # MQTT's payload is fundamentally bytes.
         # Using UTF-8 encoding to convert the JSON string to bytes.
         payload = json.dumps(data).encode("utf-8")
+        # added
         signature = private_key.sign(
             payload,
             padding.PSS(
@@ -109,6 +110,7 @@ def on_message(client, userdata, message):
 
 client = mqtt.Client()
 try:
+    # added
     client.username_pw_set(
         username=USERNAME,
         password=PASSWORD
