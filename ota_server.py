@@ -24,8 +24,7 @@ with open("private_key.pem", "rb") as key_file:
         key_file.read(),
         password=None
     ))
-            
-
+          
 def send_manifest():
     global version, chunks
     try:
@@ -78,7 +77,6 @@ def send_chunks(path:str, version:str, chunk_index:int):
     except Exception as e:
         print(f"Error occurred while sending chunk {chunk_index}: {e}")
         sys.exit(1)
-
 
 def on_message(client, userdata, message):
     print("Topic:", message.topic)

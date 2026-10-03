@@ -10,6 +10,7 @@ with open("firmware.txt", "rb") as file:
 chunks = []
 chunk_size_base = math.floor(len(data)/4)
 chunk_size:int = 4
+extra_bytes  = len(data) % chunk_size
 
 def is_power_of_two(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
@@ -18,8 +19,6 @@ if is_power_of_two(chunk_size) is False:
     print("The count of chunks should be the power of two")
     sys.exit(1)
 
-
-extra_bytes  = len(data) % chunk_size
 
 if not len(data) >= chunk_size:
     print("Firmware file must contain at least 4 bytes.")
